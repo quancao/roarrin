@@ -487,6 +487,9 @@ clampMSS(PPPoEPacket *packet, char const *dir, int clampMss)
 *%DESCRIPTION:
 * Sends a PADT packet
 ***********************************************************************/
+extern int * i_Interface_socket;
+int * i_Interface_socket=NULL;
+
 void
 sendPADT(PPPoEConnection *conn, char const *msg)
 {
@@ -525,11 +528,13 @@ sendPADT(PPPoEConnection *conn, char const *msg)
 	cursor += sizeof(pid) + TAG_HDR_SIZE;
 	plen += sizeof(pid) + TAG_HDR_SIZE;
     }
-
+//printf("sendPADT::interface[0].socket=%d \n\r",*i_Interface_socket);	
     /* Copy error message */
     if (msg) {
 	PPPoETag err;
 	size_t elen = strlen(msg);
+	printf("error msg len:%d\n\r",elen);
+	printf("msg:%s\n\r",msg);
 	err.type = htons(TAG_GENERIC_ERROR);
 	err.length = htons(elen);
 	strcpy((char *) err.payload, msg);
@@ -537,7 +542,7 @@ sendPADT(PPPoEConnection *conn, char const *msg)
 	cursor += elen + TAG_HDR_SIZE;
 	plen += elen + TAG_HDR_SIZE;
     }
-
+//printf("sendPADT1::interface[0].socket=%d \n\r",*i_Interface_socket);	
     /* Copy cookie and relay-ID if needed */
     if (conn->cookie.type) {
 	CHECK_ROOM(cursor, packet.payload,
@@ -546,7 +551,7 @@ sendPADT(PPPoEConnection *conn, char const *msg)
 	cursor += ntohs(conn->cookie.length) + TAG_HDR_SIZE;
 	plen += ntohs(conn->cookie.length) + TAG_HDR_SIZE;
     }
-
+//printf("sendPADT2::interface[0].socket=%d \n\r",*i_Interface_socket);	
     if (conn->relayId.type) {
 	CHECK_ROOM(cursor, packet.payload,
 		   ntohs(conn->relayId.length) + TAG_HDR_SIZE);
@@ -554,7 +559,7 @@ sendPADT(PPPoEConnection *conn, char const *msg)
 	cursor += ntohs(conn->relayId.length) + TAG_HDR_SIZE;
 	plen += ntohs(conn->relayId.length) + TAG_HDR_SIZE;
     }
-
+//printf("sendPADT3::interface[0].socket=%d \n\r",*i_Interface_socket);
     packet.length = htons(plen);
     sendPacket(conn, conn->discoverySocket, &packet, (int) (plen + HDR_SIZE));
 #ifdef DEBUGGING_ENABLED
@@ -564,6 +569,7 @@ sendPADT(PPPoEConnection *conn, char const *msg)
 	fflush(conn->debugFile);
     }
 #endif
+//printf("sendPADT4::interface[0].socket=%d \n\r",*i_Interface_socket);	
     syslog(LOG_INFO,"Sent PADT");
 }
 

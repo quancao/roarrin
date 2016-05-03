@@ -58,6 +58,20 @@ static char const RCSID[] =
 /* Default interface if no -I option given */
 #define DEFAULT_IF "eth0"
 
+/*
+#include <pthread.h>
+#include <thcfg.h>	
+
+struct thread_cfg thcfg={
+	manager_stack_size:8*1024,
+	each_thread_stack_size:2*1024,
+	main_thread:2*1024	
+};
+*/
+#include <time.h>
+
+///#include <sys/select.h>		//YDChao, add for not able to compile
+
 /* Global variables -- options */
 int optInactivityTimeout = 0;	/* Inactivity timeout */
 int optClampMSS          = 0;	/* Clamp MSS to this value */
@@ -71,6 +85,7 @@ PPPoEConnection *Connection = NULL; /* Must be global -- used
 				       in signal handler */
 
 int persist = 0; 		/* We are not a pppd plugin */
+
 /***********************************************************************
 *%FUNCTION: sendSessionPacket
 *%ARGUMENTS:
@@ -222,16 +237,124 @@ sessionDiscoveryPacket(PPPoEConnection *conn)
 *%DESCRIPTION:
 * Handles the "session" phase of PPPoE
 ***********************************************************************/
+
+/*
+   Bridge mode route through ppp0,
+  60 secoonds timer to delete the route,
+  to avoid echoing abnormal TCP packet.  
+*/
+/*pthread_t timer_thread;
+int http_telnet_act=0;
+
+void* timer_func(void * pParam)
+{
+int save_http_telnet_act=0, http_telnet_timer=0;
+
+
+	while( 1 )
+	{
+		usleep( 1000000 );
+
+		if( http_telnet_act )
+		{
+			if( http_telnet_act != save_http_telnet_act )
+			{
+				http_telnet_timer = 60;
+				save_http_telnet_act = http_telnet_act;
+			}
+			else
+			{
+				if( http_telnet_timer )
+				{
+					http_telnet_timer--;
+					if( http_telnet_timer == 0 )
+					{
+						system("/bin/route del default gw 0.0.0.0 dev ppp0");
+						save_http_telnet_act = 0;
+						http_telnet_act = 0;
+						fprintf(stderr, "   del ppp0 route\n");
+					}
+				}
+			}
+		}				
+	}	
+}
+*/
+void Rx_print( unsigned char *data, int len )
+{
+int i;
+
+	//fprintf(stderr, " len=%d\n", len);
+	if( len > 80 )
+		len = 80;
+    for(i=0;i<len;i+=10)
+    	fprintf(stderr, "%2x %2x %2x %2x %2x %2x %2x %2x %2x %2x\n",*(data+i),*(data+i+1),
+    		*(data+i+2),*(data+i+3),*(data+i+4),*(data+i+5),*(data+i+6),
+    		*(data+i+7),*(data+i+8),*(data+i+9));
+	fprintf(stderr, "\n");
+}
+
+#if 0
+int GetFlashSize()
+{
+	unsigned int iSizeBit = inpw(ROMCON/*0xfff01004*/);
+	iSizeBit = (iSizeBit >> 16) & 0x00000007;
+
+	return 0x00040000 << iSizeBit;
+}
+#endif
+
+int ppp1_up = 0, ppp0_Socket, ttyfd3g;
+
 void
 session(PPPoEConnection *conn)
 {
+	
+	printf("%s:%d \n",__FILE__,__LINE__);
     fd_set readable;
     PPPoEPacket packet;
     struct timeval tv;
     struct timeval *tvp = NULL;
     int maxFD = 0;
     int r;
+int fd_ppp1, ppp0_ip=0, recvbyte, route_timer=0;
+unsigned short int big8080, big8787;
+struct ifreq ifr;
+unsigned char RecvBfr[1600], cbuf[16], cCMD[48];;
 
+//BTAP_CONFIG_PARAM_T *pstBTAP_ConfigParam;
+
+
+/*	ttyfd3g = dup( 17 );
+	if(ttyfd3g < 0)
+		printErr( "dup 3g device failed!" );
+	else
+		fprintf(stderr, "pppoe: dup 3g device:%d\n", ttyfd3g);	*/
+	big8080 = htons(8786);
+	big8787 = htons(8787);
+	//big8080 = htons(80);
+	//big8787 = htons(23);
+
+/*	r = sizeof( BTAP_CONFIG_PARAM_T ); 
+	if( pstBTAP_ConfigParam = malloc( r ) )
+	{
+	int iLen, iOffsetConfig;
+
+		memset( pstBTAP_ConfigParam, 0, r );
+	
+		iOffsetConfig = GetFlashSize() - r;
+		if (iOffsetConfig < 0)
+			goto EXIT_READ_FLASH;
+		
+		iLen = ReadWinbondFlash(iOffsetConfig, r, (char *)pstBTAP_ConfigParam);
+	
+		if( iLen == r )
+			big8080 = htons( (unsigned short int)pstBTAP_ConfigParam->ulHttpRemotePort );
+
+	EXIT_READ_FLASH:
+		free( pstBTAP_ConfigParam );
+	}
+*/
     /* Drop privileges */
     dropPrivs();
 
@@ -248,8 +371,52 @@ session(PPPoEConnection *conn)
     packet.type = 1;
     packet.code = CODE_SESS;
     packet.session = conn->session;
-
+printf("%s:%d \n",__FILE__,__LINE__);
     initPPP();
+printf("%s:%d \n",__FILE__,__LINE__);
+
+//	ppp0_Socket = socket( PF_INET, SOCK_RAW, htons(ETH_P_IP) ); //no Rx
+	ppp0_Socket = socket( PF_INET, SOCK_PACKET, htons(ETH_P_IP) ); //incorrect data and len?
+//	ppp0_Socket = socket( PF_PACKET, SOCK_PACKET, htons(ETH_P_IP) ); //incorrect data and len?
+//	ppp0_Socket = socket( PF_PACKET, SOCK_RAW, htons(ETH_P_IP) ); //incorrect data and len?
+//	ppp0_Socket = socket( AF_PACKET, SOCK_PACKET, htons(ETH_P_ALL) ); //incorrect data and len?
+	if (ppp0_Socket == -1)
+		fprintf(stderr, "Could not create a ppp0_Socket socket!\n");
+	else
+	{
+		fprintf(stderr, "ppp0_Socket Socket created.\n");
+
+    		if (ppp0_Socket > (maxFD-1)) maxFD = ppp0_Socket;
+    		maxFD++;
+
+		fcntl( ppp0_Socket, F_SETFL, O_NONBLOCK );
+
+		strcpy(ifr.ifr_name, "ppp0");
+		if (setsockopt(ppp0_Socket, SOL_SOCKET, SO_BINDTODEVICE,(char *)&ifr, sizeof(ifr)) < 0)
+		{
+			close(ppp0_Socket);
+			fprintf(stderr,"ppp0_Socket Could not bind to interface!\n");
+		}
+
+		if( ioctl(ppp0_Socket, SIOCGIFADDR, &ifr) < 0)
+			ppp0_ip = 0;
+		else
+		{
+			ppp0_ip = (*(struct sockaddr_in *)&(ifr.ifr_addr)).sin_addr.s_addr;
+			fprintf( stderr, "pppoe: ppp0_ip=0x%8x\n", ntohl(ppp0_ip) );
+		}
+	}
+
+	if( (fd_ppp1 = socket(AF_INET,SOCK_DGRAM,0)) < 0 )
+		fprintf( stderr, "pppoe: fdppp1 socket fail!\n");
+	else
+	{
+		memset( &ifr, 0, sizeof( ifr ) );	
+		strcpy( ifr.ifr_name, "ppp1" );
+	}
+
+	//Timer thread
+	//pthread_create(&timer_thread, NULL, &timer_func, (void *) NULL);
 
 #ifdef USE_BPF
     /* check for buffered session data */
@@ -274,6 +441,9 @@ session(PPPoEConnection *conn)
 	    FD_SET(conn->discoverySocket, &readable);
 	}
 	FD_SET(conn->sessionSocket, &readable);
+	if( ppp1_up == 2 )
+		FD_SET( ppp0_Socket, &readable );
+	
 	while(1) {
 	    r = select(maxFD, &readable, NULL, NULL, tvp);
 	    if (r >= 0 || errno != EINTR) break;
@@ -317,6 +487,83 @@ session(PPPoEConnection *conn)
 	}
 #endif
 
+	if( ppp1_up == 0 )
+	{
+		ioctl(fd_ppp1, SIOCGIFFLAGS, &ifr);
+		if( (ifr.ifr_flags & IFF_UP) && (ppp0_Socket > 0) )
+		{
+			fprintf( stderr, "pppoe: fd_ppp1 is up!\n");
+			ppp1_up = 1;
+
+			//system("/sbin/poe_filt.sh");//Filter for Mode of Bridge by pppoe, 3Jtech Proprietory, YDChao
+			route_timer = time(0) + 2;
+		}
+	}
+
+	if( FD_ISSET(ppp0_Socket, &readable) )
+	{
+		if( (recvbyte = recv(ppp0_Socket, RecvBfr, 1600, 0)) < 0 )
+			fprintf(stderr, "ppp0 Rx error!\n");
+		else
+		{
+		//Rx_print( RecvBfr, recvbyte );
+
+		//....Accept IPv4 only....
+		if( ((recvbyte+2) < /*ETHERMTU-HDR_SIZE*/1481) && (recvbyte > 20) && (*RecvBfr==0x45) )
+		{
+		unsigned short int dstport;
+			//fprintf(stderr, "ppp0 Rx %d\n", recvbyte);
+			///fprintf(stderr, "R %d ", recvbyte);
+			///Rx_print( RecvBfr, recvbyte );
+
+			//drop TCP 8080(HTTP) and 8787(TELNET)
+			dstport = *((unsigned short int *)(RecvBfr+22));
+		///	//fprintf(stderr, "pppoe: rx dstport=0x%4x\n", dstport);
+
+			if( !( *(RecvBfr+9)==6 && (dstport==big8080 || dstport ==big8787) && ((*((int *)(RecvBfr+16)))==ppp0_ip) ) )
+			{
+				memcpy( &packet.payload[2], RecvBfr, recvbyte );
+				//fill PPP_IP code
+				packet.payload[0] = 0;
+				packet.payload[1] = 0x21;
+				sendSessionPacket( conn, &packet, recvbyte+2 );
+			}
+			else
+			{
+				//route for internal HTTPD and TELNETD
+				//if( http_telnet_act == 0 )
+				if( route_timer == 0 )
+				{
+				/*	sprintf( cbuf, "%s", inet_ntoa(ppp0_ip) );
+					sprintf( cCMD, "route add -net default gw %s dev ppp0", cbuf );
+					system( cCMD );
+
+for trying CLARO not able to browse www.uol.com
+				*/	fprintf(stderr, "  add ppp0 route\n");
+				}
+				//http_telnet_act++;
+				route_timer = time(0) + 15;
+			}	
+		}
+		}
+	}
+
+	if( route_timer && (time(0) > route_timer) )
+	{
+		route_timer = 0;
+		
+		if( ppp1_up == 1 )
+		{
+			ppp1_up = 2;
+		////////system("/sbin/poe_filt.sh");//Filter for Mode of Bridge by pppoe, 3Jtech Proprietory, YDChao
+		}
+		else
+		{	
+//for trying CLARO not able to browse www.uol.com
+			//system("route del default gw 0.0.0.0 dev ppp0");
+			fprintf(stderr, "   del ppp0 route\n");
+		}
+	}			
     }
 }
 
@@ -334,10 +581,16 @@ session(PPPoEConnection *conn)
 static void
 sigPADT(int src)
 {
-  syslog(LOG_DEBUG,"Received signal %d on session %d.",
+  syslog(LOG_INFO,"Received signal %d on session %d.",
 	 (int)src, (int) ntohs(Connection->session));
   sendPADTf(Connection, "RP-PPPoE: Received signal %d", src);
   exit(EXIT_SUCCESS);
+}
+
+static void
+sigTERM(int src)
+{
+  exit(0);
 }
 
 /**********************************************************************
@@ -352,6 +605,7 @@ sigPADT(int src)
 void
 usage(char const *argv0)
 {
+		printf("Start usage..\n");
     fprintf(stderr, "Usage: %s [options]\n", argv0);
     fprintf(stderr, "Options:\n");
 #ifdef USE_BPF
@@ -400,6 +654,11 @@ usage(char const *argv0)
 int
 main(int argc, char *argv[])
 {
+		printf("pppoe Main Start at :%p \n ",main);
+		printf("pppoe asyncReadFromEth Start at :%p \n ",asyncReadFromEth);
+		
+		printf("start pppoe....\n");
+		//return;
     int opt;
     int n;
     unsigned int m[6];		/* MAC address in -e option */
@@ -414,12 +673,13 @@ main(int argc, char *argv[])
     int disc = N_HDLC;
     long flags;
 #endif
-
+printf("%s:%d \n",__FILE__,__LINE__);
     if (getuid() != geteuid() ||
 	getgid() != getegid()) {
 	IsSetID = 1;
     }
-
+ 
+printf("%s:%d \n",__FILE__,__LINE__);
     /* Initialize connection info */
     memset(&conn, 0, sizeof(conn));
     conn.discoverySocket = -1;
@@ -430,6 +690,7 @@ main(int argc, char *argv[])
     Connection = &conn;
 
     /* Initialize syslog */
+printf("%s:%d \n",__FILE__,__LINE__);    
     openlog("pppoe", LOG_PID, LOG_DAEMON);
 
 #ifdef DEBUGGING_ENABLED
@@ -437,7 +698,13 @@ main(int argc, char *argv[])
 #else
     options = "I:VAT:hS:C:Usm:np:e:kdf:F:t:";
 #endif
+printf("%s:%d \n",__FILE__,__LINE__);
+opt = getopt(argc, argv, "I:VAT:hS:C:Usm:np:e:kdf:F:t:");
+printf("get opt :%c arg:%s \n",opt,optarg);  	
+printf("%s:%d \n",__FILE__,__LINE__);
+
     while((opt = getopt(argc, argv, options)) != -1) {
+  printf("get opt :%d \n",opt);  	
 	switch(opt) {
 	case 't':
 	    if (sscanf(optarg, "%d", &conn.discoveryTimeout) != 1) {
@@ -570,9 +837,11 @@ main(int argc, char *argv[])
 	    break;
 	default:
 	    usage(argv[0]);
+	    return;
 	}
     }
-
+printf("%s:%d \n",__FILE__,__LINE__);
+//return;
     /* Pick a default interface name */
     if (!conn.ifName) {
 #ifdef USE_BPF
@@ -652,7 +921,7 @@ main(int argc, char *argv[])
     }
 
     /* Set signal handlers: send PADT on HUP; ignore TERM and INT */
-    signal(SIGTERM, SIG_IGN);
+    signal(SIGTERM, sigTERM);
     signal(SIGINT, SIG_IGN);
     signal(SIGHUP, sigPADT);
     session(&conn);
@@ -733,7 +1002,7 @@ asyncReadFromEth(PPPoEConnection *conn, int sock, int clampMss)
     PPPoEPacket packet;
     int len;
     int plen;
-    int i;
+    int i, Yes_IP=0;
     unsigned char pppBuf[4096];
     unsigned char *ptr = pppBuf;
     unsigned char c;
@@ -811,6 +1080,75 @@ asyncReadFromEth(PPPoEConnection *conn, int sock, int clampMss)
 	clampMSS(&packet, "incoming", clampMss);
     }
 
+    /* check PPP protocol type */
+//fprintf( stderr, "Eth rd:0x%2x%2x\n", packet.payload[0], packet.payload[1] );
+    if (packet.payload[0] & 0x01) {
+        /* 8 bit protocol type */
+
+        /* Is it IPv4? */
+        if (packet.payload[0] == 0x21) {
+            Yes_IP = 1;
+        }
+    } else {
+        /* 16 bit protocol type */
+
+        /* Is it IPv4? */
+        if (packet.payload[0] == 0x00 &&
+            packet.payload[1] == 0x21) {
+            Yes_IP = 1;
+        }
+    }
+
+if( Yes_IP && (ppp1_up==2) )
+{
+static int ppp0_TxSock=0;
+//struct sockaddr ppp0_sa;
+//struct ifreq ifr;
+
+    if( ppp0_TxSock == 0 )
+    {
+/*	ppp0_TxSock = socket( AF_PACKET, SOCK_PACKET, IPPROTO_RAW ); //no data sent?
+	if (ppp0_TxSock == -1)
+	{
+		fprintf(stderr, "Could not create a ppp0_TxSock socket!\n");
+		return;
+	}
+	else
+	{
+		fprintf(stderr, "ppp0_TxSocket Socket created.\n");
+
+		memset(&ifr, 0, sizeof(struct ifreq));
+		strcpy(ifr.ifr_name, "ppp0");
+		if (setsockopt(ppp0_TxSock, SOL_SOCKET, SO_BINDTODEVICE,(char *)&ifr, sizeof(ifr)) < 0)
+		{
+			close( ppp0_TxSock );
+			ppp0_TxSock = 0;
+			fprintf(stderr,"ppp0_TxSock Could not bind to interface!\n");
+		}
+	}*/
+
+	//ETH_P_IP: TCP and UDP got reset by whom(inside SM3G)???
+	//ETH_P_ALL: no data sent
+	ppp0_TxSock = openInterface( "ppp0", /*PPP_IP 0x21,*/ ETH_P_IP, 0 );
+	fprintf(stderr, "ppp0_TxSock=%d Socket created.\n", ppp0_TxSock);
+    }
+
+	/*memset( &ppp0_sa, 0, sizeof( ppp0_sa ) );
+	strcpy(ppp0_sa.sa_data, "ppp0");*/
+    if( ppp0_TxSock )
+    {
+	if( send( ppp0_TxSock, &packet.payload[2], plen-2, 0/*, &ppp0_sa, sizeof(struct sockaddr)*/) < 0 )
+		fprintf( stderr, "send ppp0 failed! %s\n", strerror(errno) );
+	/*else
+	{
+		//fprintf( stderr, "send ppp0 %d\n", plen );
+		fprintf( stderr, "T %d ", plen );
+		///Rx_print( &packet.payload[2], plen-2 );
+	}*/
+    }
+	return;
+}
+
     /* Compute FCS */
     fcs = pppFCS16(PPPINITFCS16, header, 2);
     fcs = pppFCS16(fcs, packet.payload, plen) ^ 0xffff;
@@ -843,10 +1181,29 @@ asyncReadFromEth(PPPoEConnection *conn, int sock, int clampMss)
     }
     *ptr++ = FRAME_FLAG;
 
+/*if( Yes_IP && ppp1_up )
+{
+/struct sockaddr ppp0_sa;
+
+	memset( &ppp0_sa, 0, sizeof( ppp0_sa ) );
+	strcpy(ppp0_sa.sa_data, "ppp0");	
+	if( sendto( ppp0_Socket, pppBuf, (ptr-pppBuf), 0, &ppp0_sa, sizeof(struct sockaddr) < 0) )
+		fprintf( stderr, "send ppp0 failed!\n" );
+/
+    if (write(ttyfd3g, pppBuf, (ptr-pppBuf)) < 0) {
+	fprintf( stderr, "send ppp0 failed!\n" );
+    }
+    else
+	fprintf( stderr, "send ppp0 %d\n", (ptr-pppBuf) );
+}    
+else*/
+{
     /* Ship it out */
     if (write(1, pppBuf, (ptr-pppBuf)) < 0) {
 	fatalSys("asyncReadFromEth: write");
     }
+}
+    
 }
 
 /**********************************************************************

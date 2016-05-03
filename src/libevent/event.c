@@ -165,9 +165,12 @@ Event_HandleEvent(EventSelector *es)
     }
 
     if (foundReadEvent || foundWriteEvent || foundTimeoutEvent) {
+	int i=0;	
 	for(;;) {
 	    r = select(maxfd+1, rd, wr, NULL, tm);
 	    if (r < 0) {
+		i++;
+		printf("Event_HandleEvent:Select error:%d\n\r",i);
 		if (errno == EINTR) continue;
 	    }
 	    break;
@@ -179,6 +182,8 @@ Event_HandleEvent(EventSelector *es)
     es->nestLevel++;
 
     if (r >= 0) {
+	printf("Event_HandleEvent:Select >0:%d\n\r",r);
+
 	/* Call handlers */
 	for (eh=es->handlers; eh; eh=eh->next) {
 
@@ -209,9 +214,9 @@ Event_HandleEvent(EventSelector *es)
 	    }
 	    /* Do callback */
 	    if (flags) {
-		EVENT_DEBUG(("Enter callback: eh=%p flags=%u\n", eh, flags));
+	    	printf("Event_HandleEvent:callback fun start:%p\n",eh->fn);
 		eh->fn(es, eh->fd, flags, eh->data);
-		EVENT_DEBUG(("Leave callback: eh=%p flags=%u\n", eh, flags));
+				printf("Event_HandleEvent:callback fun stop\n");		
 	    }
 	}
     }

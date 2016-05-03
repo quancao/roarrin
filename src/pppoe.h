@@ -345,3 +345,149 @@ do {\
 #define NOT_UNICAST(e) ((e[0] & 0x01) != 0)
 #define BROADCAST(e) ((e[0] & e[1] & e[2] & e[3] & e[4] & e[5]) == 0xFF)
 #define NOT_BROADCAST(e) ((e[0] & e[1] & e[2] & e[3] & e[4] & e[5]) != 0xFF)
+
+#if 0
+//copied from NatRouter/CommonDef.h, July 4, YDChao 
+typedef struct
+{
+	unsigned long ulIPAddress;
+	unsigned short usPortFrom;
+	unsigned short usPortTo;
+	char cProtocolType;
+}VIRTUALHOSTITEM_T;	* 剞攜翋儂沭醴 *
+
+typedef struct
+{
+	unsigned long ulCheckSum;	
+	
+	unsigned char uOPMode;
+	unsigned char uAuthentication;
+
+	char b3GEnable;
+
+	char acPPPUserName[64];
+	char acPPPPasswd[64];
+	char acAPN[64];
+
+	char acDialStr[32];	
+	char acBluetothPW[32];
+	char acBluetothName[32];	
+	char acExtendATCMD[64];
+	char bEnableDHCPD;
+	char bEnablePPPD;	
+	char bEnableNAT;
+	char bEnablePMP;
+	
+	char acDDNSAccount[64];
+ 	char acDDNSPasswd [32];
+	char acDDNSDomainName[64];	
+	char bEnableDDNS;
+	unsigned char uDDNSServerType;
+
+	char bPingWanEnable;
+	char bLCPCheckEnable;
+	char bSIMcard_Select;			////......
+	char acPingWanIP[32];	
+	unsigned char uPingWanPeriod;
+	unsigned char uPingWanMaxLose;	
+
+	char bNeed3GPinCheck;
+	char ac3GPingCode[12];	
+
+	char bNeedLoginPINCheck;
+	char acLoginPingCode[12];		
+	
+	unsigned long ulPrivateIPAddress;
+	unsigned long ulPrivateSubnetMask;
+	unsigned long uDHCPlPStartFrom;
+	unsigned long uDHCPlPEndTo;
+
+	VIRTUALHOSTITEM_T avVirtualHostItem[/*MAX_VIRTUAL_HOST_ITEM*/10];
+	
+	char acHttpPassword[25];
+	unsigned long ulHttpRemotePort;
+
+	unsigned char uBridgeModeAutoConfig;
+	unsigned long ulBridgeModeGatewayIP;
+	unsigned long ulBridgeModeNetmask;	
+
+////////#ifdef  CONFIG_FEATURE_FTDI_USBSERIAL
+
+	unsigned char uSerialSpeed;      //0:57600 1:115200  2:460800 3:921600
+	unsigned char uSerialFlowCtrl;   // 0:disable  1:Enable
+	unsigned char uSerialDatabit;     // 0:7 1:8
+	unsigned char uSerialParity;      // 0:0 1:odd 2:even
+	unsigned char uSerialStopbit;    // 0:0 1:1
+
+	unsigned char ucDisconnectTime;    // 0:off 1:on
+
+	unsigned char ucCSQdeteckbit;	// 0:off 1:on
+
+////////#endif 
+
+	unsigned long ulDNS_IPAddress;
+	char ManagerHost_Name[64];
+	char ManagerHost_Name_1[64];
+	unsigned long ulManagerHost_Port;
+	char acSNMPCommunity[32];
+	unsigned long ulEth0GatewayIP;
+	unsigned long ulManager_ReportInterval;
+
+	char bEnableWIFI;
+	char bSSIDvisible;
+	unsigned char uWIFIChannel;
+	unsigned char uTxRate;
+	unsigned char uMode80211;
+	unsigned char uEncrypType;
+	unsigned char uKey1234Type;
+	unsigned char uDefaultKeyID;
+	unsigned char uAuthMode;
+	char acSSIDName[32];
+	char acWEPKey1Str[32];
+	char acWEPKey2Str[32];
+	char acWEPKey3Str[32];
+	char acWEPKey4Str[32];
+	char acWPAPSKStr[64];
+
+	char acPPPUserName_1[64];
+	char acPPPPasswd_1[64];
+	char acAPN_1[64];
+	char acDialStr_1[32];	
+	char ac3GPingCode_1[12];	
+	char bNeed3GPinCheck_1;
+	unsigned char uAuthentication_1;
+
+	char bAuto_SWitch_SIM;
+	char cThreshold_EC_IO;
+	char cThreshold_Rx_dbm;
+	unsigned long cEC_IO_Low_Time;
+	unsigned long cRx_dbm_Low_Time;
+	char bSWitch_SIM_by_ECIO;
+	char bSWitch_SIM_by_Rxdbm;
+	char bSWitch_SIM_by_Dwelt2G;
+	char cSIM2_Dwelt_Time;
+	unsigned long cDwelt2G_Time;
+
+	char bEnablePMP_SMS;
+	char SMS_Condition;
+	unsigned long SMS_ReportInterval;
+	char SMStoPhone[32];
+	char SIM1_Phone[32];
+	char SIM2_Phone[32];
+
+}BTAP_CONFIG_PARAM_T;
+//end copied from NatRouter/CommonDef.h, July 4, YDChao 
+
+//copied from NatRouter/FlashCtl.h, July 4, YDChao 
+#include <asm/arch/flash.h>
+#include <asm/arch/firmware.h>
+
+#define __NR_ReadWinbondFlash		(0x900000+225)//(__NR_SYSCALL_BASE+225)
+
+static inline int ReadWinbondFlash(unsigned long pos, unsigned long length, char * buffer)
+{
+///////	SendWDIPulse();
+	return syscall(__NR_ReadWinbondFlash,pos,length,buffer);	
+}
+#endif
+

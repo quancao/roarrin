@@ -1,0 +1,45 @@
+for i in src  ; do make -C $i all || exit ; done
+make[1]: Entering directory `/raid0/work/01-mystartup/freelancer/MT7260/ln930_smiii_firmware/SM3_LN930_mbim_iTech/source/user/rp-pppoe-3.10/src'
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o pppoe.o pppoe.c
+pppoe.c: In function `session':
+pppoe.c:323: warning: unused variable `cbuf'
+pppoe.c:323: warning: unused variable `cCMD'
+pppoe.c: In function `main':
+pppoe.c:840: warning: `return' with no value, in function returning non-void
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o if.o if.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o debug.o debug.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o common.o common.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o ppp.o ppp.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o discovery.o discovery.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -o pppoe pppoe.o if.o debug.o common.o ppp.o discovery.o
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o pppoe-server.o pppoe-server.c
+pppoe-server.c:96:1: warning: "CHECK_ROOM" redefined
+In file included from pppoe-server.h:18,
+                 from pppoe-server.c:31:
+pppoe.h:336:1: warning: this is the location of the previous definition
+pppoe-server.c: In function `raise_state_event':
+pppoe-server.c:2109: warning: implicit declaration of function `inet_addr'
+pppoe-server.c: In function `wait_gprs_pppd_established':
+pppoe-server.c:2301: warning: int format, time_t arg (arg 4)
+pppoe-server.c:2328: warning: int format, time_t arg (arg 3)
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o md5.o md5.c
+cd libevent && make DEFINES=""
+make[2]: Entering directory `/raid0/work/01-mystartup/freelancer/MT7260/ln930_smiii_firmware/SM3_LN930_mbim_iTech/source/user/rp-pppoe-3.10/src/libevent'
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes -I..  -c -o event.o event.c
+event.c: In function `Event_HandleEvent':
+event.c:173: warning: implicit declaration of function `printf'
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes -I..  -c -o event_tcp.o event_tcp.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes -I..  -c -o hash.o hash.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes -I..  -c -o event_sig.o event_sig.c
+rm -f libevent.a
+/opt/buildroot-gcc342/bin/mipsel-linux-ar -cq libevent.a event.o event_tcp.o hash.o event_sig.o
+ranlib libevent.a
+make[2]: Leaving directory `/raid0/work/01-mystartup/freelancer/MT7260/ln930_smiii_firmware/SM3_LN930_mbim_iTech/source/user/rp-pppoe-3.10/src/libevent'
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -o pppoe-server  pppoe-server.o if.o debug.o common.o md5.o   -Llibevent -levent
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o pppoe-sniff.o pppoe-sniff.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -o pppoe-sniff pppoe-sniff.o if.o common.o debug.o
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -g -O2 -Wall -Wstrict-prototypes    '-DPPPOE_PATH="/bin/pppoe"' '-DPPPD_PATH="/bin/pppd"' '-DPLUGIN_PATH="/etc/ppp/plugins/rp-pppoe.so"' '-DPPPOE_SERVER_OPTIONS="/etc/ppp/pppoe-server-options"' -Ilibevent '-DVERSION="3.10"' -c -o relay.o relay.c
+/opt/buildroot-gcc342/bin/mipsel-linux-gcc -o pppoe-relay relay.o if.o debug.o common.o
+
+Type 'make install' as root to install the software.
+make[1]: Leaving directory `/raid0/work/01-mystartup/freelancer/MT7260/ln930_smiii_firmware/SM3_LN930_mbim_iTech/source/user/rp-pppoe-3.10/src'

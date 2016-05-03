@@ -70,9 +70,12 @@ typedef struct ClientSessionStruct {
     struct ClientSessionStruct *next; /* In list of free or active sessions */
     PppoeSessionFunctionTable *funcs; /* Function table */
     pid_t pid;			/* PID of child handling session */
+    pid_t gpid;			/* PID of the 3G/GPRS modem pppd thread */
     Interface *ethif;		/* Ethernet interface */
     unsigned char myip[IPV4ALEN]; /* Local IP address */
     unsigned char peerip[IPV4ALEN]; /* Desired IP address of peer */
+    unsigned char dns[IPV4ALEN]; /* DNS address */
+    unsigned char wins[IPV4ALEN]; /* WINS address */
     UINT16_t sess;		/* Session number */
     unsigned char eth[ETH_ALEN]; /* Peer's Ethernet address */
     unsigned int flags;		/* Various flags */

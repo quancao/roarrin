@@ -527,6 +527,12 @@ openInterface(char const *ifname, UINT16_t type, unsigned char *hwaddr)
 int
 sendPacket(PPPoEConnection *conn, int sock, PPPoEPacket *pkt, int size)
 {
+	if( size > 1500 )
+	{
+		sysErr("(sendPacket size > 1500)");		//added by YDChao
+		return 0;
+	}
+	
 #if defined(USE_BPF)
     if (write(sock, pkt, size) < 0) {
 	sysErr("write (sendPacket)");

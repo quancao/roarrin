@@ -14,6 +14,8 @@
 * LIC: GPL
 *
 ***********************************************************************/
+#define CONFIG_FEATURE_PPP_BRIDGE
+/* #undef  CONFIG_FEATURE_PPP_BRIDGE */
 
 static char const RCSID[] =
 "$Id$";
@@ -54,9 +56,13 @@ static char const RCSID[] =
 #include <sys/time.h>
 #endif
 
+#include <stdio.h>
 #include <time.h>
 
 #include <signal.h>
+#include <dirent.h>
+
+#include <sys/ioctl.h>	//YDChao, 2011, July 4th, for adding route default gw ppp0
 
 #ifdef HAVE_LICENSE
 #include "license.h"
@@ -82,10 +88,15 @@ static void startPPPD(ClientSession *sess);
 static void sendErrorPADS(int sock, unsigned char *source, unsigned char *dest,
 			  int errorTag, char *errorMsg);
 
+pid_t* FindPidByName(char* pcPidName);
+pid_t *pid_GPRSpppd = NULL;  
+pid_t startGPRSPPPD(void);
+int wait_gprs_pppd_established(ClientSession *session);
+
 #define CHECK_ROOM(cursor, start, len) \
 do {\
     if (((cursor)-(start))+(len) > MAX_PPPOE_PAYLOAD) { \
-	syslog(LOG_ERR, "Would create too-long packet"); \
+	syslog(LOG_INFO, "Would create too-long packet"); \
 	return; \
     } \
 } while(0)
@@ -97,6 +108,8 @@ static int PppoeSessionIsActive(ClientSession *ses);
 #define MAX_SERVICE_NAMES 64
 static int NumServiceNames = 0;
 static char const *ServiceNames[MAX_SERVICE_NAMES];
+
+static unsigned char cGetPADT=0; //add by mhho
 
 PppoeSessionFunctionTable DefaultSessionFunctionTable = {
     PppoeStopSession,
@@ -131,6 +144,7 @@ EventSelector *event_selector;
 
 /* Use Linux kernel-mode PPPoE? */
 static int UseLinuxKernelModePPPoE = 0;
+//static int UseLinuxKernelModePPPoE = 1;
 
 /* File with PPPD options */
 static char *pppoptfile = NULL;
@@ -151,7 +165,8 @@ static unsigned char CookieSeed[SEED_LEN];
 #define MAXLINE 512
 
 /* Default interface if no -I option given */
-#define DEFAULT_IF "eth0"
+//#define DEFAULT_IF "eth0"
+#define DEFAULT_IF "br0"	//YDChao
 
 /* Access concentrator name */
 char *ACName = NULL;
@@ -206,10 +221,36 @@ static void
 childHandler(pid_t pid, int status, void *s)
 {
     ClientSession *session = s;
+	
+    printf("childHandler::interface[0].socket=%d \n\r",interfaces[0].sock);
 
     /* Temporary structure for sending PADT's. */
     PPPoEConnection conn;
+		printf("session->pid:%d Get SIGCHID from :%d\n",session->pid,pid);
+		
+/*		if(pid==session->pid)
+		{
+			if(cGetPADT)  return;
 
+			printf("3G pppd section kill :%d \n",session->gpid);
+    			
+    			//system("killall pppd");	//YDChao
+    			if( pid_GPRSpppd )
+    			{
+    				printf("(B)kill pid_GPRSpppd: %d\n", pid_GPRSpppd[0]);
+    				kill( pid_GPRSpppd[0], SIGTERM );
+    				free( pid_GPRSpppd );
+    				pid_GPRSpppd = NULL;
+    			}
+			//if(session->gpid)
+			//	kill(session->gpid, SIGTERM);
+			
+    			if (session->gpid) {
+		    	session->funcs->stop(session, "Received PADT");				
+   	  		}
+			////return;
+		}								*/
+		
 #ifdef HAVE_L2TP
     /* We're acting as LAC, so when child exits, become a PPPoE <-> L2TP
        relay */
@@ -253,9 +294,12 @@ childHandler(pid_t pid, int status, void *s)
 
     session->serviceName = "";
     control_session_terminated(session);
+    printf("childHandler1::interface[0].socket=%d \n\r",interfaces[0].sock);	
     if (pppoe_free_session(session) < 0) {
+    printf("childHandler2::interface[0].socket=%d \n\r",interfaces[0].sock);		
 	return;
     }
+    printf("childHandler3::interface[0].socket=%d \n\r",interfaces[0].sock);	
 
 }
 
@@ -592,7 +636,7 @@ processPADI(Interface *ethif, PPPoEPacket *packet, int len)
 
     /* Ignore PADI's which don't come from a unicast address */
     if (NOT_UNICAST(packet->ethHdr.h_source)) {
-	syslog(LOG_ERR, "PADI packet from non-unicast source address");
+	syslog(LOG_INFO, "PADI packet from non-unicast source address");
 	return;
     }
 
@@ -640,17 +684,14 @@ processPADI(Interface *ethif, PPPoEPacket *packet, int len)
     } else {
 	ok = 1;			/* No Service-Name tag in PADI */
     }
-
     if (!ok) {
 	/* PADI asked for unsupported service */
 	return;
     }
-
     /* Generate a cookie */
     cookie.type = htons(TAG_AC_COOKIE);
     cookie.length = htons(COOKIE_LEN);
     genCookie(packet->ethHdr.h_source, myAddr, CookieSeed, cookie.payload);
-
     /* Construct a PADO packet */
     memcpy(pado.ethHdr.h_dest, packet->ethHdr.h_source, ETH_ALEN);
     memcpy(pado.ethHdr.h_source, myAddr, ETH_ALEN);
@@ -664,7 +705,6 @@ processPADI(Interface *ethif, PPPoEPacket *packet, int len)
     CHECK_ROOM(cursor, pado.payload, acname_len+TAG_HDR_SIZE);
     memcpy(cursor, &acname, acname_len + TAG_HDR_SIZE);
     cursor += acname_len + TAG_HDR_SIZE;
-
     /* If no service-names specified on command-line, just send default
        zero-length name.  Otherwise, add all service-name tags */
     servname.type = htons(TAG_SERVICE_NAME);
@@ -722,9 +762,9 @@ void
 processPADT(Interface *ethif, PPPoEPacket *packet, int len)
 {
     size_t i;
-
+    
     unsigned char *myAddr = ethif->mac;
-
+	//printf("Enter processPADT \n");
     /* Ignore PADT's not directed at us */
     if (memcmp(packet->ethHdr.h_dest, myAddr, ETH_ALEN)) return;
 
@@ -732,7 +772,7 @@ processPADT(Interface *ethif, PPPoEPacket *packet, int len)
     i = ntohs(packet->session) - 1 - SessOffset;
     if (i >= NumSessionSlots) return;
     if (Sessions[i].sess != packet->session) {
-	syslog(LOG_ERR, "Session index %u doesn't match session number %u",
+	syslog(LOG_INFO, "Session index %u doesn't match session number %u",
 	       (unsigned int) i, (unsigned int) ntohs(packet->session));
 	return;
     }
@@ -760,9 +800,27 @@ processPADT(Interface *ethif, PPPoEPacket *packet, int len)
     }
     Sessions[i].flags |= FLAG_RECVD_PADT;
     parsePacket(packet, parseLogErrs, NULL);
+    
+    cGetPADT=1;//add by mhho
+
+    printf("interface[0].socket=%d \n\r",interfaces[0].sock);
+    	
     Sessions[i].funcs->stop(&Sessions[i], "Received PADT");
+    printf("interface[0].socket=%d \n\r",interfaces[0].sock);	
 }
 
+
+//Add by mhho for BTAP
+void restartHSUPA(void)
+{
+printf("USB power cycle\n");
+return;
+	system("gpio l 11 4000 0 0 0 0");
+	sleep( 3 );
+	system("gpio l 11 0 4000 0 0 0");
+}
+
+//end of add
 /**********************************************************************
 *%FUNCTION: processPADR
 *%ARGUMENTS:
@@ -778,6 +836,8 @@ processPADT(Interface *ethif, PPPoEPacket *packet, int len)
 void
 processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 {
+    cGetPADT=0; //add by mhho
+	
     unsigned char cookieBuffer[COOKIE_LEN];
     ClientSession *cliSession;
     pid_t child;
@@ -800,12 +860,13 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
     receivedCookie.type = 0;
     requestedService.type = 0;
 
+
     /* Ignore PADR's not directed at us */
     if (memcmp(packet->ethHdr.h_dest, myAddr, ETH_ALEN)) return;
 
     /* Ignore PADR's from non-unicast addresses */
     if (NOT_UNICAST(packet->ethHdr.h_source)) {
-	syslog(LOG_ERR, "PADR packet from non-unicast source address");
+	syslog(LOG_INFO, "PADR packet from non-unicast source address");
 	return;
     }
 
@@ -821,12 +882,15 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 		   packet->ethHdr.h_source[4],
 		   packet->ethHdr.h_source[5],
 		   MaxSessionsPerMac);
+		   
 	    return;
 	}
     }
+
     parsePacket(packet, parsePADRTags, NULL);
 
     /* Check that everything's cool */
+
     if (!receivedCookie.type) {
 	/* Drop it -- do not send error PADS */
 	return;
@@ -846,13 +910,14 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 
     /* Check service name */
     if (!requestedService.type) {
-	syslog(LOG_ERR, "Received PADR packet with no SERVICE_NAME tag");
+	syslog(LOG_INFO, "Received PADR packet with no SERVICE_NAME tag");
 	sendErrorPADS(sock, myAddr, packet->ethHdr.h_source,
 		      TAG_SERVICE_NAME_ERROR, "RP-PPPoE: Server: No service name tag");
 	return;
     }
 
     slen = ntohs(requestedService.length);
+
     if (slen) {
 	/* Check supported services */
 	for(i=0; i<NumServiceNames; i++) {
@@ -864,7 +929,7 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 	}
 
 	if (!serviceName) {
-	    syslog(LOG_ERR, "Received PADR packet asking for unsupported service %.*s", (int) ntohs(requestedService.length), requestedService.payload);
+	    syslog(LOG_INFO, "Received PADR packet asking for unsupported service %.*s", (int) ntohs(requestedService.length), requestedService.payload);
 	    sendErrorPADS(sock, myAddr, packet->ethHdr.h_source,
 			  TAG_SERVICE_NAME_ERROR, "RP-PPPoE: Server: Invalid service name tag");
 	    return;
@@ -873,11 +938,10 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 	serviceName = "";
     }
 
-
 #ifdef HAVE_LICENSE
     /* Are we licensed for this many sessions? */
     if (License_NumLicenses("PPPOE-SESSIONS") <= NumActiveSessions) {
-	syslog(LOG_ERR, "Insufficient session licenses (%02x:%02x:%02x:%02x:%02x:%02x)",
+	syslog(LOG_INFO, "Insufficient session licenses (%02x:%02x:%02x:%02x:%02x:%02x)",
 	       (unsigned int) packet->ethHdr.h_source[0],
 	       (unsigned int) packet->ethHdr.h_source[1],
 	       (unsigned int) packet->ethHdr.h_source[2],
@@ -901,10 +965,11 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
 	return;
     }
 #endif
+
     /* Looks cool... find a slot for the session */
     cliSession = pppoe_alloc_session();
     if (!cliSession) {
-	syslog(LOG_ERR, "No client slots available (%02x:%02x:%02x:%02x:%02x:%02x)",
+	syslog(LOG_INFO, "No client slots available (%02x:%02x:%02x:%02x:%02x:%02x)",
 	       (unsigned int) packet->ethHdr.h_source[0],
 	       (unsigned int) packet->ethHdr.h_source[1],
 	       (unsigned int) packet->ethHdr.h_source[2],
@@ -924,14 +989,25 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
     cliSession->startTime = time(NULL);
     cliSession->serviceName = serviceName;
 
+system("pppd call 3g");
+	while( pid_GPRSpppd == NULL )
+	{
+		pid_GPRSpppd = FindPidByName("pppd");
+		usleep( 5000 );
+	}	
+	printf("pid_GPRSpppd: %d\n\r", pid_GPRSpppd[0]);
+
+
     /* Create child process, send PADS packet back */
     child = fork();
+////child = vfork(); how is the process of "pppd pty /bin/pppoe" been killed...??? 
     if (child < 0) {
 	sendErrorPADS(sock, myAddr, packet->ethHdr.h_source,
 		      TAG_AC_SYSTEM_ERROR, "RP-PPPoE: Server: Unable to start session process");
 	pppoe_free_session(cliSession);
 	return;
     }
+
     if (child != 0) {
 	/* In the parent process.  Mark pid in session slot */
 	cliSession->pid = child;
@@ -942,9 +1018,10 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
     }
 
     /* In the child process.  */
-
     /* Close all file descriptors except for socket */
     closelog();
+
+    /* In the usermode, we should not close these fd. ???*/  
     for (i=0; i<CLOSEFD; i++) {
 	if (i != sock) {
 	    close(i);
@@ -954,8 +1031,8 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
     openlog("pppoe-server", LOG_PID, LOG_DAEMON);
     /* pppd has a nasty habit of killing all processes in its process group.
        Start a new session to stop pppd from killing us! */
-    setsid();
-
+    setsid();////// how is the process of "pppd pty /bin/pppoe" been killed...??? 
+	
     /* Send PADS and Start pppd */
     memcpy(pads.ethHdr.h_dest, packet->ethHdr.h_source, ETH_ALEN);
     memcpy(pads.ethHdr.h_source, myAddr, ETH_ALEN);
@@ -995,7 +1072,45 @@ processPADR(Interface *ethif, PPPoEPacket *packet, int len)
     /* Close sock; don't need it any more */
     close(sock);
 
+printf("%s:%d \n",__FILE__,__LINE__); 	
+
+    /* We will start the GPRS PPPD first */
+#ifdef CONFIG_FEATURE_PPP_BRIDGE
+    // cliSession->gpid = startGPRSPPPD(); 
+    //system("autoconn3G.sh connect &");
+/*
+system("autoconn3G.sh connect &");
+	while( pid_GPRSpppd == NULL )
+	{
+		pid_GPRSpppd = FindPidByName("pppd");
+		usleep( 10000 );
+	}	
+	printf("pid_GPRSpppd: %d\n\r", pid_GPRSpppd[0]);
+*/
+    if (0 == wait_gprs_pppd_established(cliSession))
+     {
+
+//for trying CLARO not able to browse www.uol.com
+//	system("route del default gw 0.0.0.0 dev ppp0");	//YDChao
+	
+    	startPPPD(cliSession);
+printf("%s:%d \r\n",__FILE__,__LINE__); 	    	
+     }
+    else
+     {
+	printf("gprs pppd established failed.\r\n");
+	restartHSUPA();
+	sleep(2);
+	pppoe_free_session(cliSession);	
+	printf("before return procPADR \n");
+	return;
+     }
+#else
+printf("%s:%d \r\n",__FILE__,__LINE__); 	
+
     startPPPD(cliSession);
+printf("%s:%d \r\n",__FILE__,__LINE__); 	    
+#endif    
 }
 
 /**********************************************************************
@@ -1013,9 +1128,12 @@ termHandler(int sig)
     syslog(LOG_INFO,
 	   "Terminating on signal %d -- killing all PPPoE sessions",
 	   sig);
+	  printf("Get SIGTERM... pid: %d\n",getpid());
     killAllSessions();
     control_exit();
-    exit(0);
+
+if( sig == SIGTERM )	//if SIGINT, do not exit. used by GPRSpppd to notify us that its IPCP is down
+    exit(0);	//do not exit, YDChao, but not able to be killed!!!!
 }
 
 /**********************************************************************
@@ -1089,6 +1207,10 @@ usage(char const *argv0)
 int
 main(int argc, char **argv)
 {
+		printf("pppoe_server Main Start at :%p \n ",main);
+		printf("pppoe_server processPADT Start at :%p \n ",processPADT);	
+		//printf("pppoe_server Main Start at \n\r ");
+		//printf("pppoe_server Main Start at \n\r ");
 
     FILE *fp;
     int i, j;
@@ -1107,6 +1229,8 @@ main(int argc, char **argv)
 #else
     char *options = "x:hI:C:L:R:T:m:FN:f:O:o:skp:lrudPc:S:1";
 #endif
+    //printf("here1\r\n");
+    //return;
 
     if (getuid() != geteuid() ||
 	getgid() != getegid()) {
@@ -1117,8 +1241,8 @@ main(int argc, char **argv)
     memset(interfaces, 0, sizeof(interfaces));
 
     /* Initialize syslog */
-    openlog("pppoe-server", LOG_PID, LOG_DAEMON);
-
+    openlog("pppoe-server", LOG_PID|LOG_NDELAY, LOG_LOCAL2);
+    setlogmask(LOG_UPTO(LOG_INFO));
     /* Default number of session slots */
     NumSessionSlots = DEFAULT_MAX_SESSIONS;
     MaxSessionsPerMac = 0; /* No limit */
@@ -1461,8 +1585,11 @@ main(int argc, char **argv)
 
     /* Open all the interfaces */
     for (i=0; i<NumInterfaces; i++) {
+  printf("%s:%d:open pppoe interface :%s \n",__FILE__,__LINE__,interfaces[i].name);
 	interfaces[i].sock = openInterface(interfaces[i].name, Eth_PPPOE_Discovery, interfaces[i].mac);
     }
+
+    printf("interfce name = %s, number_interface= %d\r\n", interfaces[0].name, NumInterfaces);
 
     /* Ignore SIGPIPE */
     signal(SIGPIPE, SIG_IGN);
@@ -1472,12 +1599,15 @@ main(int argc, char **argv)
     if (!event_selector) {
 	rp_fatal("Could not create EventSelector -- probably out of memory");
     }
+    printf("here1\r\n");
 
     /* Set signal handlers for SIGTERM and SIGINT */
     if (Event_HandleSignal(event_selector, SIGTERM, termHandler) < 0 ||
 	Event_HandleSignal(event_selector, SIGINT, termHandler) < 0) {
 	fatalSys("Event_HandleSignal");
     }
+
+    printf("here2\r\n");
 
     /* Control channel */
 #ifdef HAVE_LICENSE
@@ -1493,6 +1623,7 @@ main(int argc, char **argv)
 					    EVENT_FLAG_READABLE,
 					    InterfaceHandler,
 					    &interfaces[i]);
+	printf("interfaces[%d]:%p  Socket:%d\n\r",i,&interfaces[i],interfaces[i].sock);
 #ifdef HAVE_L2TP
 	interfaces[i].session_sock = -1;
 #endif
@@ -1500,6 +1631,8 @@ main(int argc, char **argv)
 	    rp_fatal("Event_AddHandler failed");
 	}
     }
+
+    printf("here3\r\n");
 
 #ifdef HAVE_LICENSE
     if (use_clustering) {
@@ -1524,9 +1657,11 @@ main(int argc, char **argv)
     }
 #endif
 
+    printf("here4\r\n");
+
     /* Daemonize -- UNIX Network Programming, Vol. 1, Stevens */
     if (beDaemon) {
-	i = fork();
+	i = vfork();
 	if (i < 0) {
 	    fatalSys("fork");
 	} else if (i != 0) {
@@ -1535,7 +1670,7 @@ main(int argc, char **argv)
 	}
 	setsid();
 	signal(SIGHUP, SIG_IGN);
-	i = fork();
+	i = vfork();
 	if (i < 0) {
 	    fatalSys("fork");
 	} else if (i != 0) {
@@ -1557,9 +1692,12 @@ main(int argc, char **argv)
 	}
     }
 
+    printf("here5\r\n");
+
     for(;;) {
 	i = Event_HandleEvent(event_selector);
 	if (i < 0) {
+			printf("Event_HandleEvent :return error\n");
 	    fatalSys("Event_HandleEvent");
 	}
 
@@ -1572,6 +1710,8 @@ main(int argc, char **argv)
 	}
 #endif
     }
+    printf("here6\r\n");
+
     return 0;
 }
 
@@ -1582,42 +1722,58 @@ serverProcessPacket(Interface *i)
     PPPoEPacket packet;
     int sock = i->sock;
 
+    printf("Receive the packet out\r\n");
+    printf("Received Interface :%p\r\n",i);	
+	
     if (receivePacket(sock, &packet, &len) < 0) {
+    	printf("socket No error:%d\n",sock);
+	printf("Can't receive packet\r\n");
 	return;
     }
 
     /* Check length */
     if (ntohs(packet.length) + HDR_SIZE > len) {
-	syslog(LOG_ERR, "Bogus PPPoE length field (%u)",
-	       (unsigned int) ntohs(packet.length));
+	/*syslog(LOG_INFO, "Bogus PPPoE length field (%u)",
+	       (unsigned int) ntohs(packet.length));*/
+	printf("Packet length error: packet.length=%d, HDR_SIZE=%d, len=%d",ntohs(packet.length),HDR_SIZE,len);
 	return;
     }
 
+    printf("serverProcessPacket received the packet\r\n");
     /* Sanity check on packet */
     if (packet.ver != 1 || packet.type != 1) {
 	/* Syslog an error */
 	return;
     }
+
+    printf("serverProcessPacket parse the packet\r\n");
     switch(packet.code) {
     case CODE_PADI:
+	printf("Received PADI packet\r\n");
 	processPADI(i, &packet, len);
 	break;
     case CODE_PADR:
+	printf("Received PADR packet:socket:%d\r\n",sock);
 	processPADR(i, &packet, len);
+	printf("Process PADR Return\r\n");
 	break;
     case CODE_PADT:
 	/* Kill the child */
+	printf("Received PADT packet\r\n");
 	processPADT(i, &packet, len);
 	break;
     case CODE_SESS:
 	/* Ignore SESS -- children will handle them */
+	printf("Received SESS packet\r\n");
 	break;
     case CODE_PADO:
     case CODE_PADS:
 	/* Ignore PADO and PADS totally */
+	printf("Received PADO-PADS packet\r\n");
 	break;
     default:
 	/* Syslog an error */
+	printf("Received UNKNOWN packet\r\n");
 	break;
     }
 }
@@ -1680,6 +1836,634 @@ sendErrorPADS(int sock,
     sendPacket(NULL, sock, &pads, (int) (plen + HDR_SIZE));
 }
 
+/**********************************************************************
+*%FUNCTION: startGPRSPPPD
+*%ARGUMENTS:
+* session -- client session record
+*%RETURNS:
+* Nothing
+*%DESCRIPTION:
+* Starts PPPD for user-mode PPPoE
+***********************************************************************/
+#ifdef CONFIG_FEATURE_PPP_BRIDGE
+pid_t startGPRSPPPD(void)
+{
+pid_t child=0;
+char *argv[32];   	
+int c = 0;
+
+	printf("startGPRSPPPD been called.\n");
+	//system("autoconn3G.sh connect &");
+
+    	/* in child thread */
+	if(setsid()<0) /* avoid pppd to kill us */
+		perror("Setsid:");
+
+        printf("startGPRSPPPD child thread success.\n"); 
+	argv[c++] = "/sbin/autoconn3G.sh";
+	argv[c++] = "connect";
+	argv[c++] = "&";
+
+	execv( argv[0], argv );
+	printf("error open pppd\n"); 	
+	exit(EXIT_FAILURE);
+
+    	/* in parent thread */
+    	return child;
+}
+
+#if 0
+pid_t
+startGPRSPPPD(void)
+{
+    pid_t child=0;
+
+	//YDChao, July 13
+	system("/bin/route del default gw 0.0.0.0 dev eth0");
+
+    printf("startGPRSPPPD been called.\n"); 
+    /*
+    child = vfork();
+    if (child < 0) {
+    	return 0;
+    }
+    
+    if (child == 0) */{
+char *argv[32];   	
+int c = 0;
+const char *user = nvram_bufget(RT2860_NVRAM, "wan_3g_user");
+const char *passwd = nvram_bufget(RT2860_NVRAM, "wan_3g_pass");
+
+    	/* in child thread */
+	if(setsid()<0) /* avoid pppd to kill us */
+		perror("Setsid:");
+
+       printf("startGPRSPPPD child thread success.\n"); 
+	argv[c++] = "pppd";
+	
+	//modify by mhho
+	argv[c++] = "/dev/ttyUSB2"; //if system use U6100, low cost 3G Modem .
+	///<----------------------------------------------------------
+	//argv[c++] = "/dev/ttyUSB3"; //if system use U6100 .
+	///argv[c++] = "/dev/ttyS1"; //if system use SIM900 Modem .
+	//end of modify
+	
+	//argv[c++] = "38400";
+	argv[c++] = "921600";	//<--------------------------------
+	///argv[c++] = "115200";//if system use SIM900 Modem 
+	//argv[c++] = "sync";	
+	argv[c++] = NULL;
+
+	argv[c++] = "name";
+	argv[c++] = "MyName";	
+
+
+	argv[c++] = "debug"; 
+	//argv[c++] = "lock";
+	argv[c++] = "modem";
+	//argv[c++] = "nocrtscts";
+	//argv[c++] = "asyncmap";
+	//argv[c++] = "20A0000";
+	//argv[c++] = "escape";
+	//argv[c++] = "FF";
+	/*argv[c++] = "kdebug";
+	argv[c++] = "1";*/
+	//argv[c++] = "0.0.0.0:0.0.0.0";
+	//argv[c++] = "noipdefault";
+	argv[c++] = "usepeerdns";
+	argv[c++] = "persist";
+	//argv[c++] = "netmask";
+	//argv[c++] = "255.255.255.0";
+	argv[c++] = "defaultroute";
+
+	argv[c++] = "nodetach";
+	argv[c++] = "noauth"; 
+	argv[c++] = "novj";
+	argv[c++] = "noccp";
+	argv[c++] = "novjccomp";
+	argv[c++] = "nopcomp";
+	argv[c++] = "noaccomp";
+	
+	argv[c++] = "connect";
+	argv[c++] = "/bin/chat -v -s -f /etc/ppp/chat_script";
+	//argv[c++] = "/etc/ppp/ppp-on-gprs-dialer";
+	//argv[c++] = "disconnect";
+	//argv[c++] = "/etc/ppp/ppp-off-gprs";
+	//argv[c++] = "unit";
+	//argv[c++] = "0";
+	argv[c++] = NULL;
+	
+	/* begin to establish the GRPS connection */
+  printf("eec GPRS pppd \n"); 
+	execv(PPPD_PATH, argv);
+	//system("pppd /dev/ttyUSB3 name MyName nodetach modem debug noauth persist novj noccp novjccomp nopcomp noaccomp connect \"/bin/chat -v -s -f /etc/ppp/chat_script\"");
+	printf("erroe open  GPRS pppd \n"); 	
+	//_exit(EXIT_FAILURE);
+	exit(EXIT_FAILURE);
+    }
+
+    /* in parent thread */
+    return child;
+    //return getpid();
+}
+
+typedef struct server_config_message_t {
+	unsigned short magic_number;	/* magic number to identify this message, here set to 0xAbCd */
+	unsigned short message_type;	/* config message type, to extend, now define only one message DHCPD_POOL_UPDATE */
+	unsigned long  host_address;	/* host address, 0 means invalid, in big-endian */
+	unsigned long  gw_address;	/* gateway address, 0 means invalid, in big-endian */
+	unsigned long  dns1_address;	/* dns-1 address */
+	unsigned long  dns2_address;	/* dns-2 address */
+	unsigned long  wins1_address;	/* wins-1 address */
+	unsigned long  wins2_address;	/* wins-2 address */
+} server_cfg_msg;
+#else
+
+#define DHCPD_CFG_MAGIC		0xAbCd
+
+#define DHCPD_POOL_UPDATE		0x0001
+#define DHCPD_ETH_UPDATE		0x0002
+#define DHCPD_STATE_EVENT		0x0003
+#define DHCPD_CONTROL_MSG		0x0004
+#define DHCPD_PPP_DISCONNCET	0x0005
+#define DHCPD_PPP_CONNECT_FAIL	0x0006
+
+#define SERVER_CTL_PORT 	6700
+
+typedef enum eControlType
+{
+	CTRL_MSG_PPPOE_LOCK,
+	CTRL_MSG_PPPOE_UNLOCK
+}CONTROL_TYPE;
+
+typedef enum eFSM_EVENT 
+{
+	FSM_EVENT_TIMEOUT = 0,
+	FSM_EVENT_ROUTER_IDENTIFY,
+	FSM_EVENT_DHCP_LINK_DOWN_OR_LEASE_EXPIRE,
+	FSM_EVENT_PPP_CONNECTED,
+	FSM_EVENT_PPP_DISCONNECT,
+	FSM_EVENT_PPP_CONNECT_FAIL
+}FSM_EVENT;
+
+typedef 	union u_msg_data {
+	struct s_eth_data {
+		unsigned long eth_peer_ipaddr;
+		unsigned char eth_peer_mac[6];
+		unsigned char expire;	/* the address expired ? */
+		unsigned char link_down; /* the ethernet link down ? */
+	}eth;
+	
+	struct s_ppp_data {
+		unsigned long peer_ipaddr;
+		unsigned long local_ipaddr;
+		unsigned char reason[32];
+	}ppp;
+}__attribute__ ((packed))STATE_MSG_DATA;
+
+typedef struct server_config_message_t {
+	unsigned short magic_number;	/* magic number to identify this message, here set to 0xAbCd */
+	unsigned short message_type;	/* config message type, to extend, now define only one message DHCPD_POOL_UPDATE */
+
+	union {
+		struct s_ppp {
+			unsigned long  host_address;	/* host address, 0 means invalid, in big-endian */
+			unsigned long  gw_address;	/* gateway address, 0 means invalid, in big-endian */
+			unsigned long  dns1_address;	/* dns-1 address */
+			unsigned long  dns2_address;	/* dns-2 address */
+			unsigned long  wins1_address;	/* wins-1 address */
+			unsigned long  wins2_address;	/* wins-2 address */
+		}ppp_if_info;
+
+		struct s_msg {
+			FSM_EVENT event;
+			STATE_MSG_DATA data;
+		}msg;
+		
+		struct s_ctrl {
+			CONTROL_TYPE ctrl_type;
+		}ctrl;
+
+		unsigned char disconnect_reason[32];
+	}data;
+#define state_event	data.msg.	event
+#define state_data	data.msg.data
+#define ctrl_type		data.ctrl.ctrl_type
+}__attribute__ ((packed)) server_cfg_msg;
+#endif
+
+int server_ctl_socket = -1;
+
+int control_socket(unsigned int ip, int port)
+{
+	int fd;
+	struct sockaddr_in addr;
+	int n = 1;
+
+	if ((fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+		return -1;
+	}
+	
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = ip;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *) &n, sizeof(n)) == -1) {
+		close(fd);
+		return -1;
+	}
+
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(struct sockaddr)) == -1) {
+		close(fd);
+		return -1;
+	}
+	
+	return fd;
+}
+
+int raise_state_event( FSM_EVENT event, void *data )
+{
+	server_cfg_msg cfg_msg;
+	struct sockaddr_in dst_addr;		
+	static int udhcpd_ctrl_socket;
+
+	if ((FSM_EVENT_PPP_CONNECTED != event) && (FSM_EVENT_PPP_DISCONNECT != event))
+		return -1;
+	
+	if ((udhcpd_ctrl_socket = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+		return -1;
+	}
+
+	/* fill the message */			
+	memset(&cfg_msg, 0x0, sizeof(cfg_msg));
+	cfg_msg.magic_number = DHCPD_CFG_MAGIC;
+	cfg_msg.message_type = DHCPD_STATE_EVENT;
+	cfg_msg.state_event = event;
+	memcpy(&cfg_msg.state_data, data, sizeof(STATE_MSG_DATA) );
+	
+	/* send the message to local-host */
+	memset(&dst_addr, 0x0, sizeof(dst_addr));
+	dst_addr.sin_family = AF_INET;
+	dst_addr.sin_port = htons(SERVER_CTL_PORT);
+	dst_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	
+	if (sendto(udhcpd_ctrl_socket, (char *)&cfg_msg, sizeof(cfg_msg), 0, (struct sockaddr *)&dst_addr, sizeof(dst_addr)) < 0) {
+		close(udhcpd_ctrl_socket);
+		return -1;
+	}
+	
+	close(udhcpd_ctrl_socket);
+
+	//YDChao, June 11
+	printf("pppoe-server, TX: raise_state_event=%d.\n", event);
+	
+	return 0;
+}
+//Add by mhho for btap
+int IP2String(unsigned long ulIP, char *pcStringOut)
+{
+	int iRt;
+	if (pcStringOut == NULL) return -1;
+
+	bzero(pcStringOut, 16);
+
+	iRt = sprintf(pcStringOut, "%u.%u.%u.%u",
+		(unsigned int)(ulIP & 0x000000FF),
+		(unsigned int)((ulIP>>8) & 0x000000FF),
+		(unsigned int)((ulIP>>16) & 0x000000FF),
+		(unsigned int)((ulIP>>24) & 0x000000FF));
+	return iRt;
+}
+
+int SetATCommandFromNet(char *CMD,int wait,char *Ret,int *rlen)	
+{
+        struct sockaddr_in clntaddr;
+        int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if((sockfd)<0) { printf("socket Error\n"); return 0;}
+        //set Net Address which contain IP & Port
+        memset(&clntaddr, 0, sizeof(clntaddr));
+        clntaddr.sin_family = AF_INET;
+        clntaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        clntaddr.sin_port =htons(60000);
+
+	 if(sendto(sockfd,CMD,strlen(CMD),0,(struct sockaddr *) &clntaddr,sizeof(struct sockaddr))<0)
+	 {
+	 	perror("SetATCommandFromNet:sendto:");	
+		*rlen=0;
+		close(sockfd);		
+		return -1;
+	 }
+
+	struct sockaddr_in stFrom;	
+       fd_set readSocket;
+	struct timeval tv;	   	
+	tv.tv_sec=wait;
+	tv.tv_usec=0;   
+	if(wait<0) 
+	{
+		*rlen=0;
+		close(sockfd);				
+		return -1;
+	}
+	
+	FD_ZERO(&readSocket);
+	FD_SET(sockfd, &readSocket);
+	int iRet = select(sockfd+1,&readSocket, NULL,NULL,&tv);  
+	if(iRet<0)
+	{	  	
+	 	perror("SetATCommandFromNet:select:");	
+		*rlen=0;
+		close(sockfd);				
+		return -1;
+	 }
+	else if(iRet==0)
+	{
+		*rlen=0;
+		close(sockfd);				
+		printf("SetATCommandFromNet:select:Time out ..\n");
+		return 0;
+
+	}
+		
+
+	int iAddrLen=sizeof(struct sockaddr_in);
+	
+	int iRecvLen=recvfrom(sockfd,Ret,*rlen,0,(struct sockaddr *)&stFrom,(socklen_t*)&iAddrLen);
+	if(iRecvLen<0) 
+	{
+		perror("SetATCommandFromNet:RecvFrom:");	
+		*rlen=0;
+		close(sockfd);
+		return -1;
+	}
+	*rlen=iRecvLen;
+	printf("pppoe-server, Recv AT return Len:%d Data:%s\n", iRecvLen, Ret);
+	close(sockfd);
+	return iRecvLen;
+}
+
+ static int IsIntDigit(char *pcStr)
+{
+	char *pc;
+	for (pc=pcStr; *pc!='\0'; pc++)
+	{
+		if (*pc > '\40' && (*pc < '0' || *pc > '9')) return 0;
+	}
+	return 1;
+}
+
+
+#define READ_BUF_SIZE	50
+pid_t* FindPidByName(char* pcPidName)
+{
+	DIR *dir;
+	struct dirent *next;
+	pid_t* pidList=NULL;
+	int i=0;
+
+	dir = opendir("/proc");
+	if (!dir)
+	{
+		fprintf(stderr, "Cannot open /proc");//CXH_MODIFY
+		return NULL;
+	}
+
+	while ((next = readdir(dir)) != NULL)
+	{
+		FILE *status;
+		char filename[READ_BUF_SIZE];
+		char buffer[READ_BUF_SIZE];
+		char name[READ_BUF_SIZE];
+
+		/* If it isn't a number, we don't want it */
+		//if (!isdigit(*next->d_name)) continue;
+
+		if (!IsIntDigit(next->d_name)) continue;//CXH_MODIFY
+
+		sprintf(filename, "/proc/%s/status", next->d_name);
+		if (! (status = fopen(filename, "r")) ) {
+			continue;
+		}
+		if (fgets(buffer, READ_BUF_SIZE-1, status) == NULL) {
+			fclose(status);
+			continue;
+		}
+		fclose(status);
+
+		/* Buffer should contain a string like "Name:   binary_name" */
+		sscanf(buffer, "%*s %s", name);
+		if (strncmp(name, pcPidName,strlen(pcPidName)) == 0) {
+			pidList=realloc( pidList, sizeof(pid_t) * (i+2));
+			pidList[i++]=strtol(next->d_name, NULL, 0);
+		}
+	}
+
+	closedir(dir);//CXH_MODIFY
+
+	if (pidList)
+		pidList[i]=0;
+	return pidList;
+}
+
+//End of add
+
+
+int
+wait_gprs_pppd_established(ClientSession *session)
+{
+	fd_set waitfd;
+	server_cfg_msg	cfg_msg;
+	struct timeval abs_timeout;
+	struct sockaddr saddr;
+	STATE_MSG_DATA msg_data;
+	
+#define PPPOE_CTRL_PORT 6800
+
+	int salen = sizeof(saddr);
+	int r = 0;
+
+	/* Avoid compiler warning */
+	abs_timeout.tv_sec = 100;
+	abs_timeout.tv_usec = 0;
+
+	FD_ZERO(&waitfd);
+
+	/* This socket is used to control the udhcpd behave by other process, such as pppd */
+	if ((server_ctl_socket = control_socket(INADDR_ANY, PPPOE_CTRL_PORT)) < 0)
+	{
+		syslog(LOG_WARNING, "PPPOE_CTRL_PORT control_socket failed!");
+		return -1;
+	}	
+	
+	FD_SET(server_ctl_socket, &waitfd);
+	
+printf("%s:%d, time:%d\n",__FILE__,__LINE__, time(0));    
+	r = select(server_ctl_socket+1, &waitfd, NULL, NULL, &abs_timeout);
+printf("%s:%d \n",__FILE__,__LINE__);    	
+	if (r < 0)
+        {
+    printf("select error... \n");
+    //pppoe_free_session(session);
+		close(server_ctl_socket);
+		return -1;
+        }
+printf("%s:%d :select ret:%d\n",__FILE__,__LINE__,r);            
+	if(r==0)
+	{
+		//sleep(5);
+    /* stop the gprs pppd thread */
+    /*		
+    PPPoEConnection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.useHostUniq = 0;
+
+    memcpy(conn.myEth, session->ethif->mac, ETH_ALEN);
+    conn.discoverySocket = session->ethif->sock;
+    conn.session = session->sess;
+    memcpy(conn.peerEth, session->eth, ETH_ALEN);
+    sendPADT(&conn, "Dial UP 3G timeout");
+    session->flags |= FLAG_SENT_PADT;
+    */
+		printf("3G pppd section kill :%d, time=%d\n",session->gpid, time(0));    
+    if (session->gpid) {
+			kill(session->gpid, SIGTERM);
+			//session->gpid=0;
+		}
+		/*
+		wait(NULL);
+		pppoe_free_session(session);
+		close(server_ctl_socket);
+		*/
+ 		return -1;
+	}
+	if (recvfrom (server_ctl_socket, &cfg_msg, sizeof(cfg_msg), 0, &saddr, &salen))
+	{
+printf("%s:%d, RX:cfg_msg.message_type=%d\n",__FILE__,__LINE__,cfg_msg.message_type);    			
+		/* Received something */
+		int iTmp;
+		switch(cfg_msg.message_type)
+		{
+			case DHCPD_POOL_UPDATE:
+				for (iTmp = 0; iTmp < 4; iTmp ++)
+					session->myip[iTmp] = ((unsigned char*)&(cfg_msg.data.ppp_if_info.gw_address))[iTmp];
+
+				for (iTmp = 0; iTmp < 4; iTmp ++)
+					session->peerip[iTmp] = ((unsigned char*)&(cfg_msg.data.ppp_if_info.host_address))[iTmp];
+
+				if (cfg_msg.data.ppp_if_info.dns1_address != 0)
+				{
+					for (iTmp = 0; iTmp < 4; iTmp ++)
+						session->dns[iTmp] = ((unsigned char*)&(cfg_msg.data.ppp_if_info.dns1_address))[iTmp];
+				}
+
+				if (cfg_msg.data.ppp_if_info.wins1_address != 0)
+				{
+					for (iTmp = 0; iTmp < 4; iTmp ++)
+						session->wins[iTmp] = ((unsigned char*)&(cfg_msg.data.ppp_if_info.wins1_address))[iTmp];
+				}
+
+				/* Raise the event */
+				memset(&msg_data, 0, sizeof(msg_data));
+				msg_data.ppp.peer_ipaddr = cfg_msg.data.ppp_if_info.gw_address;
+				msg_data.ppp.local_ipaddr = cfg_msg.data.ppp_if_info.host_address;
+				sprintf(msg_data.ppp.reason, "PPP Connection Established");
+				
+				raise_state_event(FSM_EVENT_PPP_CONNECTED, &msg_data);
+				break;
+
+			case DHCPD_PPP_DISCONNCET:
+				killAllSessions();
+				break;
+
+			#if 0	
+			case DHCPD_PPP_DISCONNCET:
+			case DHCPD_PPP_CONNECT_FAIL:
+				memset(&msg_data, 0, sizeof(msg_data));
+				strcpy(msg_data.ppp.reason, cfg_msg.data.disconnect_reason);
+				
+				raise_state_event((cfg_msg.message_type == DHCPD_PPP_DISCONNCET)?
+								FSM_EVENT_PPP_DISCONNECT: FSM_EVENT_PPP_CONNECT_FAIL, 
+								&msg_data);
+				break;
+
+			case DHCPD_CONTROL_MSG:
+				if (cfg_msg.data.ctrl.ctrl_type == CTRL_MSG_PPPOE_UNLOCK)
+				{
+					/* unlock */
+					pppoe_connection_lock = FALSE;
+				}
+				else
+				{
+					/* lock */
+					pppoe_connection_lock = TRUE;
+				}
+				break;
+			#endif
+			default:
+				break;
+		}
+	}
+	
+	close(server_ctl_socket);
+		
+/*		pid_t *pidlist;  
+
+		 char cret[64]={0};
+		 int iretlen=64;
+		 char *pret1;
+		 char *pret2;
+
+		 pidlist=FindPidByName("LedConnect");
+		int ret=SetATCommandFromNet("AT+PSRAT",5,cret,&iretlen);	
+		
+		if(ret>0)
+		{
+			pret1=strstr(cret,"PSRAT:");
+			pret2=strstr(pret1,"\r\n");
+			*pret2=0;
+			if((pret1[7]=='H')||(pret1[7]=='U'))
+			{
+				printf("PPP_IPCP_3G detected!!\n");	
+				if(pidlist[0])
+	  		       kill(pidlist[0],SIGUSR2);				
+			}
+			else
+			{
+				printf("PPP_IPCP_2G detected!!\n");			
+				if(pidlist[0])				
+	  		       kill(pidlist[0],SIGUSR1);								
+			}
+		}
+		else
+		{
+			printf("Get Connect State error..\n");
+		}  
+*/	
+/*	{//pppd defaultroute does not work every time, so we add default gateway.
+	struct ifreq ifr;
+	int fd;
+	unsigned long ulIP;
+	char cCMD[96], cbfr[16];
+
+		if( (fd = socket(AF_INET,SOCK_DGRAM,0)) < 0)
+			return -1;
+	
+		strcpy(ifr.ifr_name, "ppp0");
+		if( ioctl(fd, SIOCGIFADDR, &ifr) < 0 )
+			return -1;
+		else
+		ulIP = (*(struct sockaddr_in *)&(ifr.ifr_addr)).sin_addr.s_addr;
+
+		sprintf( cbfr, "%s", inet_ntoa(ulIP) );
+		sprintf( cCMD, "/bin/route add -net default gw %s dev ppp0", cbfr );
+	printf("___> %s\n", cCMD);
+		system( cCMD );
+	}	
+*/	
+	return 0;
+}
+#endif
 
 /**********************************************************************
 *%FUNCTION: startPPPDUserMode
@@ -1704,7 +2488,7 @@ startPPPDUserMode(ClientSession *session)
     argv[c++] = "pty";
 
     /* Let's hope service-name does not have ' in it... */
-    snprintf(buffer, SMALLBUF, "%s -n -I %s -e %u:%02x:%02x:%02x:%02x:%02x:%02x%s -S '%s'",
+    snprintf(buffer, SMALLBUF, "%s -n -I %s -e %u:%02x:%02x:%02x:%02x:%02x:%02x %s -S '%s'",
 	     PPPOE_PATH, session->ethif->name,
 	     (unsigned int) ntohs(session->sess),
 	     session->eth[0], session->eth[1], session->eth[2],
@@ -1715,10 +2499,10 @@ startPPPDUserMode(ClientSession *session)
 	/* TODO: Send a PADT */
 	exit(EXIT_FAILURE);
     }
-
+/*
     argv[c++] = "file";
     argv[c++] = pppoptfile;
-
+*/
     snprintf(buffer, SMALLBUF, "%d.%d.%d.%d:%d.%d.%d.%d",
 	    (int) session->myip[0], (int) session->myip[1],
 	    (int) session->myip[2], (int) session->myip[3],
@@ -1738,6 +2522,32 @@ startPPPDUserMode(ClientSession *session)
 	/* TODO: Send a PADT */
 	exit(EXIT_FAILURE);
     }
+
+    if (session->dns[0] != 0)
+     {
+    	    argv[c++] = "ms-dns";
+	    snprintf(buffer, SMALLBUF, "%d.%d.%d.%d",
+		    (int) session->dns[0], (int) session->dns[1],
+		    (int) session->dns[2], (int) session->dns[3]);
+    	    argv[c++] = strdup(buffer);
+     }
+    else
+     {
+    	    argv[c++] = "ms-dns";
+	    snprintf(buffer, SMALLBUF, "202.106.0.20");
+    	    argv[c++] = strdup(buffer);
+     }
+
+
+    if (session->wins[0] != 0)
+     {
+    	    argv[c++] = "ms-wins";
+	    snprintf(buffer, SMALLBUF, "%d.%d.%d.%d",
+		    (int) session->wins[0], (int) session->wins[1],
+		    (int) session->wins[2], (int) session->wins[3]);
+    	    argv[c++] = strdup(buffer);
+     }
+
     argv[c++] = "nodetach";
     argv[c++] = "noaccomp";
     argv[c++] = "nobsdcomp";
@@ -1746,6 +2556,12 @@ startPPPDUserMode(ClientSession *session)
     argv[c++] = "novj";
     argv[c++] = "novjccomp";
     argv[c++] = "default-asyncmap";
+
+    argv[c++] = "lcp-echo-interval";
+		argv[c++] = "10";    
+    argv[c++] = "lcp-echo-failure";        
+		argv[c++] = "4";        
+    
     if (Synchronous) {
 	argv[c++] = "sync";
     }
@@ -1754,9 +2570,12 @@ startPPPDUserMode(ClientSession *session)
 	sprintf(buffer, "%u", (unsigned int) (ntohs(session->sess) - 1 - SessOffset));
 	argv[c++] = buffer;
     }
+
+    argv[c++] = "debug";
     argv[c++] = NULL;
 
     execv(PPPD_PATH, argv);
+    //_exit(EXIT_FAILURE);
     exit(EXIT_FAILURE);
 }
 
@@ -1780,8 +2599,8 @@ startPPPDLinuxKernelMode(ClientSession *session)
     char buffer[SMALLBUF];
 
     argv[c++] = "pppd";
-    argv[c++] = "plugin";
-    argv[c++] = PLUGIN_PATH;
+    //argv[c++] = "plugin";
+    //argv[c++] = PLUGIN_PATH;
 
     /* Add "nic-" to interface name */
     snprintf(buffer, SMALLBUF, "nic-%s", session->ethif->name);
@@ -1854,8 +2673,36 @@ startPPPDLinuxKernelMode(ClientSession *session)
 void
 startPPPD(ClientSession *session)
 {
+#if 0
+//printf("%s:%d:Startpppd",__FILE__,LINE__);
+   printf("startPPPD been called. UseLinuxKernelModePPPoE = %d\r\n",UseLinuxKernelModePPPoE); 
+   pid_t child;
+
+    printf("startPPPD been called.\n"); 
+    child = vfork();
+    if (child < 0) {
+    	printf("error vfork startPPPD ..\n");
+    	return ;
+    }
+    
+    if (child != 0) 
+    {
+	session->pid = child;
+	control_session_started(session);        	
+	Event_HandleChildExit(event_selector, child, childHandler, session);
+    	return;
+    }
+
+	if(setsid()<0) /* avoid pppd to kill us */
+		perror("Setsid:");
+#endif
+
+//*    no further PPP react,		YDChao try if PC PPPoe client could negotiate with 3G PPP server
+//RESULT: PPPoe packet can not go to the dialup PPP interface, need to strip PPPoe header and relay PPP packet 
+    //setsid(); 
     if (UseLinuxKernelModePPPoE) startPPPDLinuxKernelMode(session);
     else startPPPDUserMode(session);
+    //_exit(-1);
 }
 
 /**********************************************************************
@@ -1876,6 +2723,7 @@ InterfaceHandler(EventSelector *es,
 		 unsigned int flags,
 		 void *data)
 {
+    printf("InterfaceHandler been called.\r\n");
     serverProcessPacket((Interface *) data);
 }
 
@@ -1889,10 +2737,16 @@ InterfaceHandler(EventSelector *es,
 * %DESCRIPTION:
 *  Kills pppd.
 ***********************************************************************/
+extern int * i_Interface_socket;
+
 static void
 PppoeStopSession(ClientSession *ses,
 		 char const *reason)
 {
+printf("Enter PppoeStopSession\n");
+		
+	i_Interface_socket=&(interfaces[0].sock);		
+		
     /* Temporary structure for sending PADT's. */
     PPPoEConnection conn;
 
@@ -1902,14 +2756,33 @@ PppoeStopSession(ClientSession *ses,
     memcpy(conn.myEth, ses->ethif->mac, ETH_ALEN);
     conn.discoverySocket = ses->ethif->sock;
     conn.session = ses->sess;
+	
     memcpy(conn.peerEth, ses->eth, ETH_ALEN);
     sendPADT(&conn, reason);
     ses->flags |= FLAG_SENT_PADT;
 
+	//pppoe_free_session( ses );	//YDChao add
+
+
+//* this kill will kill pppoe-server itself....???
+printf("pppoe stop, section kill :%d \n",ses->pid);
     if (ses->pid) {
 	kill(ses->pid, SIGTERM);
-    }
-    ses->funcs = &DefaultSessionFunctionTable;
+	//ses->pid=0;
+    }    
+//
+    // stop the gprs pppd thread 
+    
+    //system("killall pppd");	//YDChao
+        if( pid_GPRSpppd )
+    	{
+    		printf("(A)kill pid_GPRSpppd: %d\n", pid_GPRSpppd[0]);
+    		kill( pid_GPRSpppd[0], SIGTERM );
+    		free( pid_GPRSpppd );
+    		pid_GPRSpppd = NULL;
+    	}
+    
+///  ses->funcs = &DefaultSessionFunctionTable;	YDCHao delete
 }
 
 /**********************************************************************
@@ -2037,7 +2910,7 @@ pppoe_free_session(ClientSession *ses)
     }
 
     if (!cur) {
-	syslog(LOG_ERR, "pppoe_free_session: Could not find session %p on busy list", (void *) ses);
+	syslog(LOG_INFO, "pppoe_free_session: Could not find session %p on busy list", (void *) ses);
 	return -1;
     }
 

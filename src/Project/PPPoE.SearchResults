@@ -1,0 +1,8 @@
+---- fopen Matches (7 in 3 files) ----
+Event.c (y:\router_dev\pppoe\rp-pppoe-3.10\src\libevent):    Event_DebugFP = fopen(fname, "w");
+Pppoe-server.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):    FILE *fp = fopen(fname, "r");
+Pppoe-server.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):    fp = fopen("/dev/urandom", "r");
+Pppoe-server.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):		if (! (status = fopen(filename, "r")) ) {
+Pppoe-server.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):    FILE *fp = fopen("/proc/meminfo", "r");
+Pppoe.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):	    pidfile = fopen(optarg, "w");
+Pppoe.c (y:\router_dev\pppoe\rp-pppoe-3.10\src):	    conn.debugFile = fopen(optarg, "w");
