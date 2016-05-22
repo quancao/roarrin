@@ -13,8 +13,8 @@ OBJS=event.o event_tcp.o hash.o event_sig.o
 SRCS=$(OBJS:.o=.c)
 HDRS=event.h event_tcp.h eventpriv.h hash.h
 CFLAGS=-g -O2 -Wall -Wstrict-prototypes -I.. $(DEFINES)
-CC=/opt/buildroot-gcc342/bin/mipsel-linux-gcc
-AR=/opt/buildroot-gcc342/bin/mipsel-linux-ar
+CC=$(CROSS_COMPILE)gcc
+AR=$(CROSS_COMPILE)ar
 
 all: libevent.a
 

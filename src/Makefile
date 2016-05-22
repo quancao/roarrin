@@ -26,8 +26,8 @@ docdir=/usr/share/doc/rp-pppoe-$(VERSION)
 install=/usr/bin/install -c
 install_dir=/usr/bin/install -c -d
 sbindir=${exec_prefix}/sbin
-CC=/opt/buildroot-gcc342/bin/mipsel-linux-gcc
-AR=/opt/buildroot-gcc342/bin/mipsel-linux-ar
+CC=$(CROSS_COMPILE)gcc
+AR=$(CROSS_COMPILE)ar
 
 
 # Plugin for pppd on Linux
